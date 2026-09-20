@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "IP Notes",
+    "slug": "ip-notes",
+    "scheme": "ipnotes",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["android", "ios"],
+    "assetBundlePatterns": ["**/*"],
+    "android": {
+      "package": "com.mahedi.ipnotes"
+    },
+    "plugins": ["expo-blur"],
+    "extra": {
+      "eas": { "projectId": "REPLACE_ME" }
+    }
+  }
+}

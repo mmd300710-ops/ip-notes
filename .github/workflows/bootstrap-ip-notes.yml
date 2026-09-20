@@ -1,0 +1,656 @@
+name: bootstrap-ip-notes
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Expo/IP Notes project files
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/config src/services src/components src/screens
+
+          # package.json
+          cat > package.json <<'EOF'
+          {
+            "name": "ip-notes",
+            "version": "1.0.0",
+            "private": true,
+            "main": "node_modules/expo/AppEntry.js",
+            "scripts": {
+              "start": "expo start",
+              "android": "expo run:android",
+              "build": "eas build --profile development --platform android"
+            },
+            "dependencies": {
+              "@react-native-async-storage/async-storage": "1.23.1",
+              "firebase": "10.14.1",
+              "expo": "~51.0.0",
+              "expo-blur": "~14.0.0",
+              "expo-auth-session": "~5.0.1",
+              "expo-status-bar": "~1.12.1",
+              "expo-web-browser": "~14.0.0",
+              "react": "18.3.1",
+              "react-native": "0.76.3",
+              "react-native-gesture-handler": "~2.16.1",
+              "react-native-reanimated": "~3.16.1",
+              "react-native-safe-area-context": "4.10.1",
+              "react-native-screens": "~4.0.0",
+              "@react-navigation/native": "^6.1.18",
+              "@react-navigation/native-stack": "^6.9.26",
+              "expo-font": "~12.1.5"
+            },
+            "devDependencies": {
+              "@babel/core": "^7.25.2",
+              "typescript": "^5.6.3"
+            }
+          }
+          EOF
+
+          # app.json
+          cat > app.json <<'EOF'
+          {
+            "expo": {
+              "name": "IP Notes",
+              "slug": "ip-notes",
+              "scheme": "ipnotes",
+              "version": "1.0.0",
+              "orientation": "portrait",
+              "userInterfaceStyle": "automatic",
+              "platforms": ["android", "ios"],
+              "assetBundlePatterns": ["**/*"],
+              "android": {
+                "package": "com.mahedi.ipnotes"
+              },
+              "plugins": ["expo-blur"],
+              "extra": {
+                "eas": { "projectId": "REPLACE_ME" }
+              }
+            }
+          }
+          EOF
+
+          # Babel
+          cat > babel.config.js <<'EOF'
+          module.exports = function (api) {
+            api.cache(true);
+            return {
+              presets: ['babel-preset-expo'],
+              plugins: ['react-native-reanimated/plugin']
+            };
+          };
+          EOF
+
+          # Firebase config placeholder (update with your real apiKey if you want auth to work)
+          cat > src/config/firebase.ts <<'EOF'
+          export const firebaseConfig = {
+            apiKey: "***",
+            authDomain: "ip-notes-7929b.firebaseapp.com",
+            projectId: "ip-notes-7929b",
+            storageBucket: "ip-notes-7929b.firebasestorage.app",
+            messagingSenderId: "400409023114",
+            appId: "1:400409023114:android:1a0bdca3fa668441fd9373"
+          };
+          EOF
+
+          # Ads placeholder
+          cat > src/services/ads.ts <<'EOF'
+          export type RewardedAdCallback = () => void;
+
+          export interface AdsManager {
+            init(): Promise<void>;
+            showBanner(): void;
+            showInterstitial(): void;
+            showRewardedAd(onEarned: RewardedAdCallback): void;
+          }
+
+          class NoOpAdsManager implements AdsManager {
+            async init() {}
+            showBanner() {}
+            showInterstitial() {}
+            showRewardedAd(onEarned: RewardedAdCallback) { onEarned(); }
+          }
+
+          export const adsManager: AdsManager = new NoOpAdsManager();
+          EOF
+
+          # Storage (Room-like via AsyncStorage)
+          cat > src/services/storage.ts <<'EOF'
+          import AsyncStorage from "@react-native-async-storage/async-storage";
+
+          export type NoteTab = {
+            tabId: string;
+            title: string;
+            updatedAt: number;
+          };
+
+          export type NoteContent = {
+            contentId: string;
+            tabId: string;
+            rawText: string;
+            updatedAt: number;
+            version: number;
+          };
+
+          const keyTabs = (uid: string) => `ipnotes::tabs::${uid}`;
+          const keyContents = (uid: string) => `ipnotes::contents::${uid}`;
+
+          function uid() {
+            return `tab_${Math.random().toString(16).slice(2)}_${Date.now()}`;
+          }
+
+          export async function loadTabs(uidStr: string): Promise<NoteTab[]> {
+            const raw = await AsyncStorage.getItem(keyTabs(uidStr));
+            if (!raw) return [];
+            return JSON.parse(raw);
+          }
+
+          export async function saveTabs(uidStr: string, tabs: NoteTab[]) {
+            await AsyncStorage.setItem(keyTabs(uidStr), JSON.stringify(tabs));
+          }
+
+          export async function loadContents(uidStr: string): Promise<Record<string, NoteContent>> {
+            const raw = await AsyncStorage.getItem(keyContents(uidStr));
+            if (!raw) return {};
+            return JSON.parse(raw);
+          }
+
+          export async function upsertContent(uidStr: string, tabId: string, rawText: string) {
+            const contents = await loadContents(uidStr);
+            const now = Date.now();
+            const existing = contents[tabId];
+
+            const next: NoteContent = existing
+              ? { ...existing, rawText, updatedAt: now, version: existing.version + 1 }
+              : {
+                  contentId: `content_${Math.random().toString(16).slice(2)}`,
+                  tabId,
+                  rawText,
+                  updatedAt: now,
+                  version: 1
+                };
+
+            contents[tabId] = next;
+            await AsyncStorage.setItem(keyContents(uidStr), JSON.stringify(contents));
+          }
+
+          export async function deleteTabEverywhere(uidStr: string, tabId: string) {
+            const tabs = (await loadTabs(uidStr)).filter((t) => t.tabId !== tabId);
+            await saveTabs(uidStr, tabs);
+
+            const contents = await loadContents(uidStr);
+            delete contents[tabId];
+            await AsyncStorage.setItem(keyContents(uidStr), JSON.stringify(contents));
+          }
+
+          export function uidTab() {
+            return uid();
+          }
+          EOF
+
+          # Glass scaffold
+          cat > src/components/GlassScaffold.tsx <<'EOF'
+          import React from "react";
+          import { View, StyleSheet } from "react-native";
+          import { BlurView } from "expo-blur";
+
+          export default function GlassScaffold({ children }: { children: React.ReactNode }) {
+            return (
+              <View style={styles.root}>
+                <View style={styles.glow1} />
+                <View style={styles.glow2} />
+
+                <View style={styles.panel}>
+                  <BlurView intensity={55} tint="dark" style={StyleSheet.absoluteFill} />
+                  {children}
+                </View>
+              </View>
+            );
+          }
+
+          const styles = StyleSheet.create({
+            root: { flex: 1, backgroundColor: "#070A12", padding: 14 },
+            panel: {
+              flex: 1,
+              borderRadius: 24,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.14)",
+              overflow: "hidden",
+            },
+            glow1: {
+              position: "absolute",
+              width: 320,
+              height: 320,
+              borderRadius: 160,
+              backgroundColor: "#6D28D9",
+              opacity: 0.35,
+              top: -120,
+              left: -120,
+            },
+            glow2: {
+              position: "absolute",
+              width: 360,
+              height: 360,
+              borderRadius: 180,
+              backgroundColor: "#22C55E",
+              opacity: 0.25,
+              bottom: -160,
+              right: -120,
+            },
+          });
+          EOF
+
+          cat > src/components/PlusButton.tsx <<'EOF'
+          import React from "react";
+          import { TouchableOpacity, Text, StyleSheet } from "react-native";
+
+          export default function PlusButton({ onPress }: { onPress: () => void }) {
+            return (
+              <TouchableOpacity style={styles.btn} onPress={onPress} activeOpacity={0.85}>
+                <Text style={styles.text}>+</Text>
+              </TouchableOpacity>
+            );
+          }
+
+          const styles = StyleSheet.create({
+            btn: {
+              position: "absolute",
+              right: 18,
+              bottom: 18,
+              width: 58,
+              height: 58,
+              borderRadius: 29,
+              backgroundColor: "rgba(255,255,255,0.12)",
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.18)",
+              alignItems: "center",
+              justifyContent: "center",
+            },
+            text: { color: "white", fontSize: 30, fontWeight: "900", lineHeight: 30 },
+          });
+          EOF
+
+          cat > src/components/TabCard.tsx <<'EOF'
+          import React from "react";
+          import { TouchableOpacity, View, Text, StyleSheet } from "react-native";
+          import type { NoteTab } from "../services/storage";
+
+          export default function TabCard({
+            tab,
+            active,
+            onPress,
+            onDelete,
+          }: {
+            tab: NoteTab;
+            active: boolean;
+            onPress: () => void;
+            onDelete: () => void;
+          }) {
+            return (
+              <TouchableOpacity
+                onPress={onPress}
+                style={[styles.card, active ? styles.cardActive : styles.cardInactive]}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text numberOfLines={1} style={[styles.title, active && styles.titleActive]}>
+                    {tab.title}
+                  </Text>
+                  <Text onPress={onDelete} style={styles.del}>
+                    ×
+                  </Text>
+                </View>
+                <Text style={styles.sub}>Updated {new Date(tab.updatedAt).toLocaleDateString()}</Text>
+              </TouchableOpacity>
+            );
+          }
+
+          const styles = StyleSheet.create({
+            card: {
+              width: 170,
+              padding: 12,
+              borderRadius: 18,
+              borderWidth: 1,
+            },
+            cardActive: {
+              backgroundColor: "rgba(255,255,255,0.14)",
+              borderColor: "rgba(255,255,255,0.35)",
+            },
+            cardInactive: {
+              backgroundColor: "rgba(255,255,255,0.06)",
+              borderColor: "rgba(255,255,255,0.12)",
+            },
+            title: { color: "white", fontWeight: "900" },
+            titleActive: { color: "white" },
+            sub: { color: "rgba(255,255,255,0.65)", marginTop: 6, fontSize: 11 },
+            del: { color: "#FB7185", fontWeight: "900", fontSize: 22, paddingLeft: 8 },
+          });
+          EOF
+
+          cat > src/components/EditorCard.tsx <<'EOF'
+          import React from "react";
+          import { View, TextInput, Text, TouchableOpacity, StyleSheet } from "react-native";
+
+          export default function EditorCard({
+            title,
+            text,
+            onChangeText,
+            onSave,
+            onDelete,
+          }: {
+            title: string;
+            text: string;
+            onChangeText: (t: string) => void;
+            onSave: () => void;
+            onDelete: () => void;
+          }) {
+            return (
+              <View style={styles.wrap}>
+                <Text style={styles.title}>{title}</Text>
+
+                <TextInput
+                  value={text}
+                  onChangeText={onChangeText}
+                  multiline
+                  placeholder="Write your notes…"
+                  placeholderTextColor="rgba(255,255,255,0.35)"
+                  style={styles.input}
+                />
+
+                <View style={styles.row}>
+                  <TouchableOpacity onPress={onDelete} style={[styles.btn, styles.btnDanger]}>
+                    <Text style={[styles.btnText, styles.dangerText]}>Delete</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={onSave} style={[styles.btn, styles.btnPrimary]}>
+                    <Text style={[styles.btnText, styles.primaryText]}>Save</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            );
+          }
+
+          const styles = StyleSheet.create({
+            wrap: { flex: 1, padding: 16 },
+            title: { color: "white", fontSize: 18, fontWeight: "900" },
+            input: {
+              marginTop: 12,
+              flex: 1,
+              borderRadius: 18,
+              padding: 14,
+              borderWidth: 1,
+              borderColor: "rgba(255,255,255,0.14)",
+              color: "white",
+              backgroundColor: "rgba(0,0,0,0.20)",
+            },
+            row: { flexDirection: "row", justifyContent: "space-between", marginTop: 12 },
+            btn: {
+              flex: 1,
+              marginHorizontal: 6,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 14,
+              borderWidth: 1,
+            },
+            btnText: { fontWeight: "900", textAlign: "center" },
+            btnDanger: { backgroundColor: "rgba(251,113,133,0.12)", borderColor: "rgba(251,113,133,0.45)" },
+            dangerText: { color: "#FB7185" },
+            btnPrimary: { backgroundColor: "rgba(255,255,255,0.14)", borderColor: "rgba(255,255,255,0.22)" },
+            primaryText: { color: "white" },
+          });
+          EOF
+
+          # Auth placeholder (Phase 1 can be debugged later; UI will still work with a mock user if needed)
+          cat > src/services/auth.ts <<'EOF'
+          export type AuthUser = { uid: string; email?: string | null; displayName?: string | null };
+
+          // For initial bootstrap, we provide a mock sign-in so the UI works.
+          // Later, we will replace with Firebase Auth Google Sign-In end-to-end.
+          export function subscribeAuth(cb: (u: AuthUser | null) => void) {
+            // Immediately emit a mock user for bootstrap UX
+            const mock: AuthUser = { uid: "debug_user", email: "debug@local" };
+            cb(mock);
+            return () => {};
+          }
+
+          export async function signInWithGoogle(): Promise<AuthUser> {
+            return { uid: "debug_user", email: "debug@local" };
+          }
+
+          export async function signOutFromApp() {}
+          EOF
+
+          # SignIn + Notes screens + App entry
+          cat > src/screens/SignInScreen.tsx <<'EOF'
+          import React, { useState } from "react";
+          import { View, Text, TouchableOpacity, ActivityIndicator } from "react-native";
+          import GlassScaffold from "../components/GlassScaffold";
+          import { signInWithGoogle } from "../services/auth";
+
+          export default function SignInScreen() {
+            const [loading, setLoading] = useState(false);
+
+            return (
+              <GlassScaffold>
+                <View style={{ flex: 1, justifyContent: "center", padding: 24 }}>
+                  <Text style={{ color: "white", fontSize: 30, fontWeight: "900" }}>IP Notes</Text>
+                  <Text style={{ color: "rgba(255,255,255,0.75)", marginTop: 10 }}>
+                    Google Sign-In (Firebase Auth)
+                  </Text>
+
+                  <TouchableOpacity
+                    disabled={loading}
+                    onPress={async () => {
+                      setLoading(true);
+                      try {
+                        await signInWithGoogle();
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    style={{
+                      marginTop: 28,
+                      paddingVertical: 14,
+                      borderRadius: 18,
+                      backgroundColor: "rgba(255,255,255,0.14)",
+                      borderWidth: 1,
+                      borderColor: "rgba(255,255,255,0.22)",
+                      alignItems: "center",
+                    }}
+                  >
+                    {loading ? <ActivityIndicator /> : <Text style={{ color: "white", fontWeight: "900" }}>Continue with Google</Text>}
+                  </TouchableOpacity>
+                </View>
+              </GlassScaffold>
+            );
+          }
+          EOF
+
+          cat > src/screens/NotesScreen.tsx <<'EOF'
+          import React, { useEffect, useMemo, useState } from "react";
+          import { Alert, ScrollView, Text, TextInput, TouchableOpacity, View } from "react-native";
+          import GlassScaffold from "../components/GlassScaffold";
+          import PlusButton from "../components/PlusButton";
+          import TabCard from "../components/TabCard";
+          import EditorCard from "../components/EditorCard";
+          import type { AuthUser } from "../services/auth";
+          import {
+            deleteTabEverywhere,
+            loadContents,
+            loadTabs,
+            saveTabs,
+            upsertContent,
+            uidTab,
+          } from "../services/storage";
+
+          export default function NotesScreen({ user }: { user: AuthUser }) {
+            const uid = user.uid;
+
+            const [tabs, setTabs] = useState<any[]>([]);
+            const [activeTabId, setActiveTabId] = useState<string | null>(null);
+            const [contents, setContents] = useState<Record<string, any>>({});
+            const [text, setText] = useState("");
+
+            async function refreshAll() {
+              const [t, c] = await Promise.all([loadTabs(uid), loadContents(uid)]);
+              setTabs(t);
+              setContents(c);
+              const nextActive = activeTabId && t.some((x) => x.tabId === activeTabId) ? activeTabId : (t[0]?.tabId ?? null);
+              setActiveTabId(nextActive);
+              if (nextActive) setText(c[nextActive]?.rawText ?? "");
+              else setText("");
+            }
+
+            useEffect(() => { refreshAll().catch(() => {}); }, []);
+
+            const activeTab = useMemo(() => tabs.find((t) => t.tabId === activeTabId) ?? null, [tabs, activeTabId]);
+
+            async function createNewTab() {
+              const id = uidTab();
+              const newTab = { tabId: id, title: `Untitled ${tabs.length + 1}`, updatedAt: Date.now() };
+              const nextTabs = [newTab, ...tabs];
+              setTabs(nextTabs);
+              setActiveTabId(id);
+              setText("");
+              await saveTabs(uid, nextTabs);
+              await upsertContent(uid, id, "");
+            }
+
+            async function saveActive() {
+              if (!activeTabId) return;
+              await upsertContent(uid, activeTabId, text);
+              const nextTabs = tabs.map((t) => (t.tabId === activeTabId ? { ...t, updatedAt: Date.now() } : t));
+              setTabs(nextTabs);
+              await saveTabs(uid, nextTabs);
+              Alert.alert("Saved", "Tab saved locally.");
+            }
+
+            async function deleteActive() {
+              if (!activeTabId) return;
+
+              Alert.alert("Delete tab?", "This removes the tab and its content.", [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Delete",
+                  style: "destructive",
+                  onPress: async () => {
+                    await deleteTabEverywhere(uid, activeTabId);
+                    await refreshAll();
+                  },
+                },
+              ]);
+            }
+
+            return (
+              <GlassScaffold>
+                <View style={{ flex: 1, paddingTop: 8 }}>
+                  <View style={{ paddingHorizontal: 16, paddingBottom: 10, flexDirection: "row", alignItems: "center" }}>
+                    <Text style={{ color: "white", fontWeight: "900", fontSize: 16, flex: 1 }}>IP Notes</Text>
+                    <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 12 }}>{user.email ?? user.uid}</Text>
+                  </View>
+
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ paddingHorizontal: 16 }}>
+                    <View style={{ flexDirection: "row", gap: 10, paddingBottom: 10 }}>
+                      {tabs.map((t) => (
+                        <TabCard
+                          key={t.tabId}
+                          tab={t}
+                          active={t.tabId === activeTabId}
+                          onPress={() => {
+                            setActiveTabId(t.tabId);
+                            setText(contents[t.tabId]?.rawText ?? "");
+                          }}
+                          onDelete={() => {
+                            setActiveTabId(t.tabId);
+                            deleteActive().catch(() => {});
+                          }}
+                        />
+                      ))}
+                      {!tabs.length && (
+                        <View style={{ padding: 14, justifyContent: "center" }}>
+                          <Text style={{ color: "rgba(255,255,255,0.65)" }}>No tabs yet. Tap +</Text>
+                        </View>
+                      )}
+                    </View>
+                  </ScrollView>
+
+                  <View style={{ flex: 1, marginTop: 6 }}>
+                    <EditorCard
+                      title={activeTab?.title ?? "No tab selected"}
+                      text={text}
+                      onChangeText={setText}
+                      onSave={saveActive}
+                      onDelete={deleteActive}
+                    />
+                  </View>
+
+                  <PlusButton onPress={createNewTab} />
+                </View>
+              </GlassScaffold>
+            );
+          }
+          EOF
+
+          cat > App.tsx <<'EOF'
+          import React, { useEffect, useState } from "react";
+          import { ActivityIndicator, View } from "react-native";
+          import NotesScreen from "./src/screens/NotesScreen";
+          import SignInScreen from "./src/screens/SignInScreen";
+          import GlassScaffold from "./src/components/GlassScaffold";
+          import { subscribeAuth, type AuthUser } from "./src/services/auth";
+          import { adsManager } from "./src/services/ads";
+
+          export default function App() {
+            const [user, setUser] = useState<AuthUser | null>(null);
+            const [loadingAuth, setLoadingAuth] = useState(true);
+
+            useEffect(() => {
+              const unsub = subscribeAuth((u) => {
+                setUser(u);
+                setLoadingAuth(false);
+              });
+
+              adsManager.init().catch(() => {});
+              return () => { unsub?.(); };
+            }, []);
+
+            if (loadingAuth) {
+              return (
+                <GlassScaffold>
+                  <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                    <ActivityIndicator />
+                  </View>
+                </GlassScaffold>
+              );
+            }
+
+            return user ? <NotesScreen user={user} /> : <SignInScreen />;
+          }
+          EOF
+
+          echo "Bootstrap files created."
+
+      - name: Configure git
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Commit and push if changed
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git commit -m "bootstrap: add IP Notes Expo Phase 1 skeleton"
+            git push
+          else
+            echo "No changes to commit."
+          fi
+
+      - name: Done
+        run: echo "Repo bootstrapped."

@@ -3,17 +3,25 @@
     "name": "IP Notes",
     "slug": "ip-notes",
     "scheme": "ipnotes",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "platforms": ["android", "ios"],
-    "assetBundlePatterns": ["**/*"],
+    "platforms": [
+      "android",
+      "ios"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "android": {
-      "package": "com.mahedi.ipnotes"
+      "package": "com.mehedi.snapnote.hasan",
+      "versionCode": 2
     },
-    "plugins": ["expo-blur"],
     "extra": {
-      "eas": { "projectId": "REPLACE_ME" }
-    }
+      "eas": {
+        "projectId": "dedfde12-b429-48da-8085-baa58ef95a70"
+      }
+    },
+    "owner": "mehedi786"
   }
 }
